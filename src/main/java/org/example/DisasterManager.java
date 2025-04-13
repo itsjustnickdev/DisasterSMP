@@ -24,6 +24,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.entity.Entity;
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
+import org.example.NoiseGenerator;
 
 public class DisasterManager {
 
@@ -190,7 +191,7 @@ public class DisasterManager {
     private void createEarthquakeCracks(Location center, int intensity) {
         Random random = new Random();
         int mainFissureLength = intensity * 2;
-        double crackWidth = 3.0 + (intensity/20.0);
+        double crackWidth = 1.0 + (intensity/100.0);
 
         // Create main fissure
         createMainFissure(center, mainFissureLength, crackWidth, random);
@@ -214,8 +215,8 @@ public class DisasterManager {
                 Location segment = start.clone().add(direction.clone().multiply(i));
                 
                 // Create fissure segment
-                for(double dx = -width; dx <= width; dx += 0.5) {
-                    for(double dz = -width; dz <= width; dz += 0.5) {
+                for(double dx = -width; dx <= width; dx += 1.0) {
+                    for(double dz = -width; dz <= width; dz += 1.0) {
                         if(dx*dx + dz*dz <= width*width) {
                             Location target = segment.clone().add(dx, 0, dz);
                             digFissureColumn(target, random);
@@ -233,13 +234,65 @@ public class DisasterManager {
 
     private void digFissureColumn(Location surfaceLoc, Random random) {
         plugin.getServer().getRegionScheduler().execute(plugin, surfaceLoc, () -> {
-            int surfaceY = world.getHighestBlockYAt(surfaceLoc) - 1;
+            int blockX = surfaceLoc.getBlockX();
+            int blockZ = surfaceLoc.getBlockZ();
+            int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
+            
+            // Verwijder vegetatie boven het oppervlak
+            for(int y = surfaceY + 3; y > surfaceY; y--) {
+                Block block = world.getBlockAt(blockX, y, blockZ);
+                if(!block.getType().isAir()) block.setType(Material.AIR, false);
+            }
+
+            // Realistische vernauwing met meerdere parameters
+            int startBreedte = 10;  // 20 blokken breed aan oppervlak
+            int minBreedte = 1;     // 2 blokken breed bij bedrock
+            int yRange = surfaceY - world.getMinHeight();
+            double noiseSeed = random.nextDouble() * 1000;
+            
             for(int y = surfaceY; y >= world.getMinHeight(); y--) {
-                Location target = new Location(world, surfaceLoc.getX(), y, surfaceLoc.getZ());
-                Block block = target.getBlock();
+                double progressie = (double)(surfaceY - y) / yRange;
                 
-                // Remove all blocks including liquids without exceptions
-                block.setType(Material.AIR, false);
+                // Combineer verschillende easing functies
+                double easedProgress = Math.pow(progressie, 0.5) * 0.7 + 
+                                      Math.pow(progressie, 2) * 0.3;
+                
+                // Voeg Perlin noise toe voor natuurlijke variatie
+                double noise = Math.abs(NoiseGenerator.noise(y * 0.1, noiseSeed)) * 1.5;
+                
+                int basisBreedte = (int) Math.round(startBreedte - (startBreedte - minBreedte) * easedProgress);
+                int huidigeBreedte = (int) (basisBreedte * (0.9 + noise * 0.2));
+                
+                // Creëer onregelmatige randen
+                int[][] vorm = {
+                    {0,1,1,1,0},
+                    {1,1,1,1,1},
+                    {1,1,0,1,1},
+                    {1,1,1,1,1},
+                    {0,1,1,1,0}
+                };
+                
+                for(int dx = -huidigeBreedte; dx <= huidigeBreedte; dx++) {
+                    for(int dz = -huidigeBreedte; dz <= huidigeBreedte; dz++) {
+                        double afstand = Math.sqrt(dx*dx + dz*dz);
+                        double maxAfstand = huidigeBreedte * (0.8 + Math.abs(NoiseGenerator.noise(dx*0.3, dz*0.3)) * 0.4);
+                        
+                        if(afstand <= maxAfstand) {
+                            // 5% kans om een blok te behouden voor ruigere textuur
+                            if(random.nextDouble() > 0.05) {
+                                Block block = world.getBlockAt(blockX + dx, y, blockZ + dz);
+                                if(!block.getType().isAir()) {
+                                    // Voeg soms grind toe aan de randen
+                                    if(afstand > maxAfstand * 0.8 && random.nextDouble() < 0.3) {
+                                        block.setType(Material.GRAVEL, false);
+                                    } else {
+                                        block.setType(Material.AIR, false);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         });
     }
