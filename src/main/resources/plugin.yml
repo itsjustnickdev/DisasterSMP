@@ -1,0 +1,14 @@
+name: DisasterSMP
+version: 1.0
+main: org.example.DisasterPlugin
+api-version: 1.21
+folia-supported: true
+commands:
+  disaster:
+    description: Start een ramp
+    usage: /disaster
+permissions:
+  disaster.trigger:
+    description: Allows a player to trigger a disaster manually
+    default: op
+

@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="DisasterSMP:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/DisasterSMP_jar</output-path>
+    <root id="archive" name="DisasterSMP.jar">
+      <element id="module-output" name="DisasterSMP" />
+    </root>
+  </artifact>
+</component>
