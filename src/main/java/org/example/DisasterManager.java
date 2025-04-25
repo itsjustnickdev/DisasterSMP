@@ -159,9 +159,11 @@ public class DisasterManager {
         });
     }
 
-    private void triggerTornado(Location startLoc, int intensity) {
-        final double speed = 2.0 + (intensity/100.0)*4.0; // Basis snelheid 2-6
-        final int duration = 600 + (int)(intensity*2); // 600-1200 ticks (30-60 sec)
+    private void triggerTornado(Location center, int intensity) {
+        int category = Math.min(5, 1 + (intensity/30));
+        int duration = (int)(20 * (30 + (category - 1) * 22.5)); // Category 1:30s - Category 5:120s
+        double speed = (25.0 + (intensity - 30) * 0.625) / 20.0;
+        double effectRadius = 15 + (intensity/20);
         final double baseSize = 2.0 + (intensity/40.0); // Basis grootte 2-5.75
         final double maxHeight = 35.0 + (intensity/5.0); // Maximale hoogte 35-55
 
@@ -201,14 +203,14 @@ public class DisasterManager {
                 
                 // Hoogtevariatie + geleidelijke stijging
                 double verticalMovement = Math.min(ticks/100.0, 1.0) * 0.3;
-                Location center = startLoc.clone().add(direction)
+                Location newCenter = center.clone().add(direction)
                     .add(0, pathRandom.nextDouble() * 2.0 - 1.0 + verticalMovement, 0);
                 
                 // Effect radius vergroten
-                destroyBlocksInRadius(center, currentSize * 2.0);
-                affectEntities(center, currentSize);
-                spawnTornadoParticles(center, currentSize);
-                destroyTreesInPath(center, currentSize);
+                destroyBlocksInRadius(newCenter, currentSize * 2.0);
+                affectEntities(newCenter, currentSize);
+                spawnTornadoParticles(newCenter, currentSize);
+                destroyTreesInPath(newCenter, currentSize);
                 
                 ticks++;
                 if(ticks > maxDuration) return;
@@ -220,13 +222,28 @@ public class DisasterManager {
                         if(x*x + z*z < radius*radius) {
                             final int finalX = x;
                             final int finalZ = z;
-                            // Schedule elk blok in zijn eigen regio
-            plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
+                            plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
                                 for(int y = 0; y < 15; y++) {
                                     Block b = center.clone().add(finalX, y, finalZ).getBlock();
                                     if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
                                         if(Math.random() < 0.3 - (y*0.02)) {
-                                            b.breakNaturally();
+                                            // Create falling block with tornado attraction
+                                            org.bukkit.entity.FallingBlock fb = world.spawnFallingBlock(
+                                                b.getLocation().add(0.5, 0, 0.5),
+                                                b.getBlockData()
+                                            );
+                                            fb.setDropItem(false);
+                                            
+                                            // Set velocity towards center with spiral
+                                            Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
+                                            Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize();
+                                            fb.setVelocity(
+                                                toCenter.normalize().multiply(0.3)
+                                                .add(tangent.multiply(0.5))
+                                                .setY(0.4 + Math.random()*0.3)
+                                            );
+                                            
+                                            b.setType(Material.AIR);
                                         }
                                     }
                                 }
@@ -237,12 +254,22 @@ public class DisasterManager {
             }
             
             private void spawnTornadoParticles(Location center, double size) {
-                int particleMultiplier = 1 + (intensity/20); // Meer particles bij hogere intensiteit
-                double heightStep = 0.2; // Kleinere stap voor meer lagen
+                int particleMultiplier = 1 + (intensity/20);
+                double heightStep = 0.2;
+                
+                // Modified sound logic with cooldown
+                if(ticks % 40 == 0 && ticks < maxDuration) {
+                    world.playSound(
+                        center, 
+                        "csmp.tornado", 
+                        2.0f, 
+                        0.8f + (float)Math.random()*0.4f
+                    );
+                }
                 
                 for(double y = 0; y < maxHeight; y += heightStep) {
                     double ratio = y/maxHeight;
-                    double currentRadius = size * (1 + ratio*3.0); // Grotere spiraal
+                    double currentRadius = size * (1 + ratio*3.0);
                     
                     // Dynamische rotatie gebaseerd op ticks
                     double angle = y * Math.PI * 0.8 + (ticks * 0.2);
@@ -272,17 +299,59 @@ public class DisasterManager {
             
             private void affectEntities(Location center, double size) {
                 double effectRadius = size * 4;
-                // Verplaats de entity access naar de juiste scheduler
+                final double tornadoMaxHeight = maxHeight;
                 plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
                     center.getNearbyEntities(effectRadius, 20, effectRadius).forEach(e -> {
-                        // Schedule elk entity effect in zijn eigen locatie
                         Location entityLoc = e.getLocation();
                         plugin.getServer().getRegionScheduler().execute(plugin, entityLoc, () -> {
-                            Vector dir = entityLoc.toVector().subtract(center.toVector());
-                            double distanceFactor = 1 - (dir.length() / effectRadius);
-                            Vector finalDir = dir.normalize().multiply(-1.5 * distanceFactor)
-                                .setY(0.8 * distanceFactor + Math.random()*0.3);
-                            e.setVelocity(finalDir);
+                            Vector toCenter = center.toVector().subtract(entityLoc.toVector());
+                            double distance = toCenter.length();
+                            double distanceFactor = 1 - (distance / effectRadius);
+                            
+                            // Hoogte t.o.v. tornado basis
+                            double heightAboveBase = entityLoc.getY() - center.getY();
+                            double heightRatio = heightAboveBase / tornadoMaxHeight;
+                            boolean shouldEject = heightRatio > 0.85; // Eject boven 85% hoogte
+
+                            if (e instanceof Player) {
+                                Player p = (Player) e;
+                                
+                                // Langzamere basiskrachten
+                                Vector inwardForce = toCenter.normalize()
+                                    .multiply(1.2 * (1 + (1 - distanceFactor))); 
+                                
+                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
+                                    .multiply(2.0 * (1 - distanceFactor));
+                                
+                                // Progressieve liftkracht gebaseerd op hoogte
+                                Vector vertical = new Vector(0, 
+                                    Math.min(0.8 + (heightRatio * 2.5), 2.5), // Max 2.5 blok/s omhoog
+                                    0);
+
+                                Vector finalForce = inwardForce
+                                    .add(tangent)
+                                    .add(vertical)
+                                    .multiply(0.6);
+
+                                // Zachtere overgang
+                                p.setVelocity(p.getVelocity().multiply(0.8).add(finalForce.multiply(0.2)));
+                                
+                                // Eject logica bovenaan
+                                if(shouldEject) {
+                                    // Gooi naar buiten + omhoog
+                                    Vector ejectDirection = toCenter.normalize().multiply(-1.5)
+                                        .setY(0.7 + (heightRatio * 0.5));
+                                    p.setVelocity(ejectDirection);
+                                } else if(distance < 3 && Math.random() < 0.1) {
+                                    // Alleen naar buiten gooien als laag
+                                    p.setVelocity(toCenter.normalize().multiply(-1).setY(0.2));
+                                }
+                                
+                                // Schade aanpassen aan hoogte
+                                if(ticks % 20 == 0 && heightRatio < 0.4) {
+                                    p.damage(1.0); // Meer schade onderin
+                                }
+                            }
                         });
                     });
                 });
