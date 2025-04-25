@@ -162,7 +162,7 @@ public class DisasterManager {
     private void triggerTornado(Location center, int intensity) {
         int category = Math.min(5, 1 + (intensity/30));
         int duration = (int)(20 * (30 + (category - 1) * 22.5)); // Category 1:30s - Category 5:120s
-        double speed = (25.0 + (intensity - 30) * 0.625) / 20.0;
+        double speed = (30.0 + (intensity - 30) * (50.0/120.0)) / 200.0; // 30-80 blocks per 10 seconds
         double effectRadius = 15 + (intensity/20);
         final double baseSize = 2.0 + (intensity/40.0); // Basis grootte 2-5.75
         final double maxHeight = 35.0 + (intensity/5.0); // Maximale hoogte 35-55
@@ -236,11 +236,13 @@ public class DisasterManager {
                                             
                                             // Set velocity towards center with spiral
                                             Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
-                                            Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize();
+                                            double distance = toCenter.length();
+                                            double distanceFactor = 1 - (distance / (radius));
                                             fb.setVelocity(
-                                                toCenter.normalize().multiply(0.3)
-                                                .add(tangent.multiply(0.5))
-                                                .setY(0.4 + Math.random()*0.3)
+                                                toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)))
+                                                .add(new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor)))
+                                                .add(new Vector(0, Math.min(3.0 + ((y/15.0) * 6.0), 8.0), 0))
+                                                .multiply(0.6 * (0.5 + Math.random() * 0.5))
                                             );
                                             
                                             b.setType(Material.AIR);
@@ -311,45 +313,47 @@ public class DisasterManager {
                             // Hoogte t.o.v. tornado basis
                             double heightAboveBase = entityLoc.getY() - center.getY();
                             double heightRatio = heightAboveBase / tornadoMaxHeight;
-                            boolean shouldEject = heightRatio > 0.85; // Eject boven 85% hoogte
+                            boolean shouldEject = heightRatio > 0.5; // Eject bij 50% hoogte
 
                             if (e instanceof Player) {
                                 Player p = (Player) e;
                                 
-                                // Langzamere basiskrachten
-                                Vector inwardForce = toCenter.normalize()
-                                    .multiply(1.2 * (1 + (1 - distanceFactor))); 
+                                // Apply similar forces to non-player entities
+                                Vector inwardForce = toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)));
+                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor));
+                                Vector vertical = new Vector(0, Math.min(3.0 + (heightRatio * 6.0), 8.0), 0);
                                 
-                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
-                                    .multiply(2.0 * (1 - distanceFactor));
-                                
-                                // Progressieve liftkracht gebaseerd op hoogte
-                                Vector vertical = new Vector(0, 
-                                    Math.min(0.8 + (heightRatio * 2.5), 2.5), // Max 2.5 blok/s omhoog
-                                    0);
-
-                                Vector finalForce = inwardForce
-                                    .add(tangent)
-                                    .add(vertical)
-                                    .multiply(0.6);
-
-                                // Zachtere overgang
+                                Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.6);
                                 p.setVelocity(p.getVelocity().multiply(0.8).add(finalForce.multiply(0.2)));
                                 
-                                // Eject logica bovenaan
                                 if(shouldEject) {
-                                    // Gooi naar buiten + omhoog
-                                    Vector ejectDirection = toCenter.normalize().multiply(-1.5)
-                                        .setY(0.7 + (heightRatio * 0.5));
-                                    p.setVelocity(ejectDirection);
-                                } else if(distance < 3 && Math.random() < 0.1) {
-                                    // Alleen naar buiten gooien als laag
-                                    p.setVelocity(toCenter.normalize().multiply(-1).setY(0.2));
+                                    // Krachtige ejectie met curve
+                                    Vector horizontalEject = toCenter.normalize().multiply(-4.5)
+                                        .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
+                                    Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
+                                    p.setVelocity(horizontalEject.add(verticalEject));
+                                    p.playSound(p.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 2.0f, 0.3f);
+                                    p.getWorld().spawnParticle(Particle.EXPLOSION, p.getLocation(), 3);
                                 }
                                 
                                 // Schade aanpassen aan hoogte
                                 if(ticks % 20 == 0 && heightRatio < 0.4) {
                                     p.damage(1.0); // Meer schade onderin
+                                }
+                            } else {
+                                // Apply similar forces to non-player entities
+                                Vector inwardForce = toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)));
+                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor));
+                                Vector vertical = new Vector(0, Math.min(3.0 + (heightRatio * 6.0), 8.0), 0);
+                                
+                                Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.6);
+                                e.setVelocity(e.getVelocity().multiply(0.8).add(finalForce.multiply(0.2)));
+                                
+                                if(shouldEject) {
+                                    Vector horizontalEject = toCenter.normalize().multiply(-4.5)
+                                        .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
+                                    Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
+                                    e.setVelocity(horizontalEject.add(verticalEject));
                                 }
                             }
                         });
