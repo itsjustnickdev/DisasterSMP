@@ -13,6 +13,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.ChatColor;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.Sound;
 
 public class DisasterPlugin extends JavaPlugin implements Listener {
 
@@ -39,13 +40,20 @@ public class DisasterPlugin extends JavaPlugin implements Listener {
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (label.equalsIgnoreCase("disaster")) {
-            if (sender instanceof Player) {
-                Player player = (Player) sender;
-                new DisasterMenu(player, disasterManager).open();
+            if (!(sender instanceof Player)) {
+                sender.sendMessage(ChatColor.RED + "Alleen spelers kunnen dit commando gebruiken!");
                 return true;
-            } else {
-                sender.sendMessage(ChatColor.RED + "Only players can use this command!");
             }
+            
+            Player player = (Player) sender;
+            if(!player.hasPermission("disaster.trigger")) {
+                player.sendMessage(ChatColor.RED + "§cAlleen admins kunnen dit commando gebruiken!");
+                player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_BASS, 1.0f, 0.5f);
+                return true;
+            }
+            
+            new DisasterMenu(player, disasterManager).open();
+            return true;
         }
         return false;
     }

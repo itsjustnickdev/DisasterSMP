@@ -9,6 +9,6 @@ commands:
     usage: /disaster
 permissions:
   disaster.trigger:
-    description: Allows a player to trigger a disaster manually
-    default: op
+    description: Toestemming om rampen te activeren
+    default: op # Alleen operators krijgen dit standaard
 
