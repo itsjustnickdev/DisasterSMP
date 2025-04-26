@@ -52,7 +52,7 @@ public class DisasterPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             
-            new DisasterMenu(player, disasterManager).open();
+            new DisasterMenu(player, disasterManager, this).open();
             return true;
         }
         return false;

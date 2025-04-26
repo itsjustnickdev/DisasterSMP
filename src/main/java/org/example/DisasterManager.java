@@ -19,6 +19,12 @@ import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.example.NoiseGenerator;
 import org.bukkit.block.BlockFace;
 import org.bukkit.GameMode;
+import net.md_5.bungee.api.ChatMessageType;
+import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
+import org.bukkit.ChatColor;
+import org.bukkit.block.data.BlockData;
 
 public class DisasterManager {
     private final World world;
@@ -48,11 +54,13 @@ public class DisasterManager {
                 int clusterSize = 1 + (intensity/60); // 1-3 meteoren per cluster
                 for(int i=0; i<clusterSize; i++) {
                     Location meteorLoc = center.clone().add(
-                        (random.nextGaussian() * spreadRadius), // Natuurlijkere distributie
+                        (random.nextGaussian() * spreadRadius),
                         50 + random.nextInt(40),
                         (random.nextGaussian() * spreadRadius)
                     );
                     createMeteorAnimation(meteorLoc, 6.0f + random.nextFloat() * 5);
+                    // Add delay between meteors in same cluster
+                    try { Thread.sleep(50); } catch (InterruptedException e) {}
                 }
                 
                 elapsedTicks.getAndAdd(10 + (intensity/50)); // Gelijkmatigere tick progressie
@@ -90,8 +98,11 @@ public class DisasterManager {
                         }
                         
                         // Minder intense particles
-                        world.spawnParticle(Particle.FLAME, currentPos, 5, 0.1, 0.1, 0.1, 0.01);
-                        world.spawnParticle(Particle.CAMPFIRE_SIGNAL_SMOKE, currentPos, 2, 0.2, 0.2, 0.2, 0.03);
+                        AtomicInteger meteorTicks = new AtomicInteger(0);
+                        if(meteorTicks.getAndIncrement() % 2 == 0) {
+                            world.spawnParticle(Particle.FLAME, currentPos, 3, 0.1, 0.1, 0.1, 0.01);
+                            world.spawnParticle(Particle.CAMPFIRE_SIGNAL_SMOKE, currentPos, 1, 0.2, 0.2, 0.2, 0.03);
+                        }
                         
                         this.accept(newPos);
                     });
@@ -508,109 +519,162 @@ public class DisasterManager {
     }
 
     private void triggerEarthquake(Location epicenter, int intensity) {
-        AtomicInteger executionCount = new AtomicInteger(0);
-        plugin.getServer().getGlobalRegionScheduler().runAtFixedRate(plugin, task -> {
-            int count = executionCount.getAndIncrement();
-            int radius = 15 + (count * 2);
+        Random random = new Random();
+        
+        // World-based effects instead of player-specific
+        world.spawnParticle(Particle.BLOCK_CRUMBLE, epicenter, 100, 25, 0, 25, 0.1, Material.STONE.createBlockData());
+        world.spawnParticle(Particle.FALLING_DUST, epicenter, 80, 25, 0, 25, 0.05, Material.DIRT.createBlockData());
+        world.playSound(epicenter, Sound.BLOCK_STONE_BREAK, 1.0f, 0.8f);
+        
+        // Actual block destruction
+        createEarthquakeCracks(epicenter, intensity);
+        
+        // Affect all nearby players
+        epicenter.getNearbyPlayers(100).forEach(p -> {
+            // Screen shake parameters
+            int shakeDuration = 40 + (intensity * 2); // 40-280 ticks (2-14 seconds)
+            float shakeIntensity = 0.08f + (intensity/150f); // 0.08-0.18
             
-            // Verplaats speleracties naar de juiste region schedulers
-            for(Player p : Bukkit.getOnlinePlayers()) {
-                if(p.getLocation().distanceSquared(epicenter) > radius*radius) continue;
-                if (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR) {
-                    continue;
-                }
-                
-                // Schedule voor elke speler apart
+            // Schedule repeating screen shake
+            AtomicInteger shakeCount = new AtomicInteger();
+            Consumer<ScheduledTask> shakeTask = t -> {
                 plugin.getServer().getRegionScheduler().execute(plugin, p.getLocation(), () -> {
-                    p.playHurtAnimation(0.5f);
-                    p.setVelocity(new Vector(
-                        (Math.random()-0.5)*0.3,
-                        0.2,
-                        (Math.random()-0.5)*0.3
-                    ));
+                    if(shakeCount.getAndIncrement() > shakeDuration/5) {
+                        t.cancel();
+                        return;
+                    }
+                    
+                    // Screen shake effect using damage animation
+                    p.playHurtAnimation(0);
+                    
+                    // Camera movement simulation
+                    Vector shakeVector = new Vector(
+                        (Math.random() - 0.5) * shakeIntensity,
+                        (Math.random() - 0.3) * shakeIntensity/2,
+                        (Math.random() - 0.5) * shakeIntensity
+                    );
+                    p.setVelocity(p.getVelocity().add(shakeVector));
+                    
+                    // Ground particles at feet
+                    p.spawnParticle(Particle.BLOCK_CRUMBLE, 
+                        p.getLocation().add(0, 0.1, 0), 5, 
+                        0.2, 0, 0.2, 0.05, 
+                        Material.DIRT.createBlockData());
                 });
-            }
+            };
             
-            // Bestaande blokbrekende code blijft hetzelfde
-            for(int i = 0; i < 20; i++) {
-                double angle = Math.toRadians(i * 18);
-                int x = (int)(Math.cos(angle) * radius);
-                int z = (int)(Math.sin(angle) * radius);
-                
-                // Directe blokmanipulatie ZONDER scheduler voor direct effect
-                Location loc = epicenter.clone().add(x, 0, z);
-                createEarthquakeCracks(loc, intensity);
-            }
+            plugin.getServer().getGlobalRegionScheduler()
+                .runAtFixedRate(plugin, shakeTask, 1, 5);
+
+            // Original velocity effects
+            p.setVelocity(p.getVelocity().add(new Vector(
+                (random.nextDouble() - 0.5) * 0.6,
+                0.1,
+                (random.nextDouble() - 0.5) * 0.6
+            )));
             
-            if(radius > 35) task.cancel();
-        }, 10, 10);
+            if(intensity > 75) {
+                p.damage(2.0);
+                p.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 1));
+            }
+            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, 
+                new TextComponent(ChatColor.RED + "⚠️ De grond trilt hevig onder je voeten!"));
+        });
     }
 
     private void createEarthquakeCracks(Location center, int intensity) {
         Random random = new Random();
-        double baseSize = 1.5 + (intensity/40.0); // Kleinere basisbreedte
-        int maxDepth = 2 + (intensity/30); // Minder diepe scheuren
+        int mainFissureLength = intensity * 2;  // Behoud lengte op basis van intensiteit
+        double crackWidth = 1.0 + (intensity/100.0);
 
-        for(int i = 0; i < 10 + (intensity/15); i++) {
-            Vector dir = new Vector(random.nextDouble()-0.5, 0, random.nextDouble()-0.5).normalize();
-            Location segment = center.clone().add(dir.multiply(i));
+        // Create only main fissure
+        createMainFissure(center, mainFissureLength, crackWidth, random);
+    }
+
+    private void createMainFissure(Location start, int length, double width, Random random) {
+        Vector direction = new Vector(random.nextDouble() - 0.5, 0, random.nextDouble() - 0.5).normalize();
+        
+        plugin.getServer().getRegionScheduler().execute(plugin, start, () -> {
+            for(int i = 0; i < length; i++) {
+                Location segment = start.clone().add(direction.clone().multiply(i));
+                
+                // Create fissure segment
+                for(double dx = -width; dx <= width; dx += 1.0) {
+                    for(double dz = -width; dz <= width; dz += 1.0) {
+                        if(dx*dx + dz*dz <= width*width) {
+                            Location target = segment.clone().add(dx, 0, dz);
+                            digFissureColumn(target, random);
+                        }
+                    }
+                }
+                
+                // Verwijder overhang creatie
+            }
+        });
+    }
+
+    private void digFissureColumn(Location surfaceLoc, Random random) {
+        plugin.getServer().getRegionScheduler().execute(plugin, surfaceLoc, () -> {
+            int blockX = surfaceLoc.getBlockX();
+            int blockZ = surfaceLoc.getBlockZ();
+            int surfaceY = world.getHighestBlockYAt(blockX, blockZ);
             
-            // Natuurlijke scheurvorming met noise
-            double noise = NoiseGenerator.noise(segment.getX(), segment.getZ());
-            double crackWidth = baseSize * (0.7 + noise*0.6); // Meer variatie
+            // Verwijder vegetatie boven het oppervlak
+            for(int y = surfaceY + 3; y > surfaceY; y--) {
+                Block block = world.getBlockAt(blockX, y, blockZ);
+                if(!block.getType().isAir()) block.setType(Material.AIR, true);
+            }
+
+            // Realistische vernauwing met meerdere parameters
+            int startBreedte = 10;  // 20 blokken breed aan oppervlak
+            int minBreedte = 1;     // 2 blokken breed bij bedrock
+            int yRange = surfaceY - world.getMinHeight();
+            double noiseSeed = random.nextDouble() * 1000;
             
-            for(int dx = -(int)crackWidth; dx <= crackWidth; dx++) {
-                for(int dz = -(int)crackWidth; dz <= crackWidth; dz++) {
-                    if(dx*dx + dz*dz > crackWidth*crackWidth) continue;
-                    
-                    Location targetLoc = segment.clone().add(dx, 0, dz);
-                    final int finalDx = dx;
-                    final int finalDz = dz;
-                    
-                    plugin.getServer().getRegionScheduler().execute(plugin, targetLoc, () -> {
-                        try {
-                            int surfaceY = world.getHighestBlockYAt(targetLoc);
-                            Block surfaceBlock = world.getBlockAt(targetLoc.getBlockX(), surfaceY, targetLoc.getBlockZ());
-                            
-                            // Alleen breken als het een solide blok is
-                            if(surfaceBlock.getType().isSolid() && !surfaceBlock.getType().name().contains("BEDROCK")) {
-                                // Breek 1-3 blokken diep
-                                for(int y = surfaceY; y > surfaceY - maxDepth && y > world.getMinHeight(); y--) {
-                                    Block target = world.getBlockAt(targetLoc.getBlockX(), y, targetLoc.getBlockZ());
-                                    if(target.getType().isSolid()) {
-                                        target.setType(Material.AIR, false);
-                                        
-                                        // 50% kans op scheur in de grond
-                                        if(y == surfaceY && random.nextBoolean()) {
-                                            world.getBlockAt(targetLoc.getBlockX(), y-1, targetLoc.getBlockZ())
-                                                .setType(Material.CRACKED_STONE_BRICKS, false);
-                                        }
+            for(int y = surfaceY; y >= world.getMinHeight(); y--) {
+                double progressie = (double)(surfaceY - y) / yRange;
+                
+                // Combineer verschillende easing functies
+                double easedProgress = Math.pow(progressie, 0.5) * 0.7 + 
+                                      Math.pow(progressie, 2) * 0.3;
+                
+                // Voeg Perlin noise toe voor natuurlijke variatie
+                double noise = Math.abs(NoiseGenerator.noise(y * 0.1, noiseSeed)) * 1.5;
+                
+                int basisBreedte = (int) Math.round(startBreedte - (startBreedte - minBreedte) * easedProgress);
+                int huidigeBreedte = (int) (basisBreedte * (0.9 + noise * 0.2));
+                
+                // Creëer onregelmatige randen
+                int[][] vorm = {
+                    {0,1,1,1,0},
+                    {1,1,1,1,1},
+                    {1,1,0,1,1},
+                    {1,1,1,1,1},
+                    {0,1,1,1,0}
+                };
+                
+                for(int dx = -huidigeBreedte; dx <= huidigeBreedte; dx++) {
+                    for(int dz = -huidigeBreedte; dz <= huidigeBreedte; dz++) {
+                        double afstand = Math.sqrt(dx*dx + dz*dz);
+                        double maxAfstand = huidigeBreedte * (0.8 + Math.abs(NoiseGenerator.noise(dx*0.3, dz*0.3)) * 0.4);
+                        
+                        if(afstand <= maxAfstand) {
+                            // 5% kans om een blok te behouden voor ruigere textuur
+                            if(random.nextDouble() > 0.05) {
+                                Block block = world.getBlockAt(blockX + dx, y, blockZ + dz);
+                                if(!block.getType().isAir()) {
+                                    if(afstand > maxAfstand * 0.8 && random.nextDouble() < 0.3) {
+                                        block.setType(Material.GRAVEL, true);
+                                    } else {
+                                        block.setType(Material.AIR, true);
                                     }
                                 }
-                                
-                                // Voeg scheurparticles toe
-                                world.spawnParticle(Particle.BLOCK, surfaceBlock.getLocation().add(0.5, 0.1, 0.5), 
-                                    10, 0.3, 0.1, 0.3, 0.05, surfaceBlock.getBlockData());
                             }
-                            
-                            // Update water en lava flow
-                            Block liquidCheck = surfaceBlock.getRelative(BlockFace.DOWN);
-                            if(liquidCheck.isLiquid()) {
-                                liquidCheck.getState().update(true, false);
-                            }
-                            
-                            // Vernietig planten en bloemen
-                            Block vegetation = surfaceBlock.getRelative(BlockFace.UP);
-                            if(vegetation.getType().isAir() || vegetation.getType().toString().contains("FLOWER")) {
-                                vegetation.breakNaturally();
-                            }
-                        } catch(Exception e) {
-                            // Negeer ongeladen chunks
                         }
-                    });
+                    }
                 }
             }
-        }
+        });
     }
 
     enum DisasterType {
