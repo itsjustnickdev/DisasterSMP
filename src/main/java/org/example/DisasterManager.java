@@ -18,6 +18,7 @@ import org.bukkit.Material;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import org.example.NoiseGenerator;
 import org.bukkit.block.BlockFace;
+import org.bukkit.GameMode;
 
 public class DisasterManager {
     private final World world;
@@ -32,34 +33,36 @@ public class DisasterManager {
         Location center = new Location(world, x, y, z);
         Random random = new Random();
         
-        int aantalMeteoren = 3 + (intensity/25); // 3-9 bij 30-150
-        AtomicInteger count = new AtomicInteger(0);
+        // Vergroot het gebied en vertraag de snelheid
+        double spreadRadius = 60.0 + (intensity/3.0); // 60-110 blokken radius
+        int durationTicks = (20 * 60) + (intensity * 16); // 1200-3600 ticks (1-3 minuten)
+        
+        AtomicInteger elapsedTicks = new AtomicInteger(0);
         
         Consumer<Location> meteorTask = new Consumer<Location>() {
             @Override
             public void accept(Location loc) {
-                if(count.getAndIncrement() >= aantalMeteoren) return;
+                if(elapsedTicks.get() >= durationTicks) return;
                 
-                // Maak finale kopie voor de scheduler
-                final Location scheduledLoc = loc.clone();
+                // Kleinere clusters met meer spreiding
+                int clusterSize = 1 + (intensity/60); // 1-3 meteoren per cluster
+                for(int i=0; i<clusterSize; i++) {
+                    Location meteorLoc = center.clone().add(
+                        (random.nextGaussian() * spreadRadius), // Natuurlijkere distributie
+                        50 + random.nextInt(40),
+                        (random.nextGaussian() * spreadRadius)
+                    );
+                    createMeteorAnimation(meteorLoc, 6.0f + random.nextFloat() * 5);
+                }
                 
-                // Genereer nieuwe meteor locatie
-                Location meteorLoc = center.clone().add(
-                    random.nextGaussian() * 25, 
-                    50 + random.nextInt(30), 
-                    random.nextGaussian() * 25
-                );
+                elapsedTicks.getAndAdd(10 + (intensity/50)); // Gelijkmatigere tick progressie
                 
-                // Start meteor animatie voor alle spelers
-                createMeteorAnimation(meteorLoc, 6.0f + random.nextFloat() * 2);
-                
-                // Plan volgende meteor met Folia scheduler
+                // Grotere interval tussen clusters
                 plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, 
-                    task -> this.accept(scheduledLoc), 15);
+                    task -> this.accept(loc), 15 + random.nextInt(15)); // 1.5-3 seconden tussen clusters
             }
         };
         
-        // Start de eerste meteor
         plugin.getServer().getGlobalRegionScheduler().run(plugin, 
             task -> meteorTask.accept(center));
     }
@@ -67,31 +70,28 @@ public class DisasterManager {
     private void createMeteorAnimation(Location impactPoint, float power) {
         Location meteorStart = impactPoint.clone().add(0, 50, 0);
         
-        // Gebruik globale scheduler in plaats van player-specifieke
         plugin.getServer().getGlobalRegionScheduler().runDelayed(plugin, task -> {
             Consumer<Location> meteorStep = new Consumer<Location>() {
                 @Override
                 public void accept(Location currentPos) {
-                    // Verplaats block check naar de region scheduler
                     plugin.getServer().getRegionScheduler().execute(plugin, currentPos, () -> {
                         Block groundBlock = world.getBlockAt(currentPos.clone().subtract(0, 1, 0));
                         if(groundBlock != null && groundBlock.getType().isSolid()) {
                             createMeteorExplosion(currentPos, power);
-                        return;
-                    }
-                    
-                        // Toon particles aan alle spelers in de buurt
-                        world.spawnParticle(Particle.FLAME, currentPos, 8, 0.2, 0.2, 0.2, 0.02);
-                        world.spawnParticle(Particle.CAMPFIRE_SIGNAL_SMOKE, currentPos, 4, 0.3, 0.3, 0.3, 0.05);
-                        world.playSound(currentPos, Sound.ENTITY_FIREWORK_ROCKET_SHOOT, 1.0f, 1.5f);
+                            return;
+                        }
                         
-                        Location newPos = currentPos.clone().add(0, -2, 0);
+                        // Vertraagde val snelheid
+                        Location newPos = currentPos.clone().add(0, -1, 0); // 1 blok per tick ipv 2
                         
-                        // Stop als we bedrock niveau bereiken
                         if(newPos.getY() <= world.getMinHeight() + 1) {
                             createMeteorExplosion(newPos, power);
                             return;
                         }
+                        
+                        // Minder intense particles
+                        world.spawnParticle(Particle.FLAME, currentPos, 5, 0.1, 0.1, 0.1, 0.01);
+                        world.spawnParticle(Particle.CAMPFIRE_SIGNAL_SMOKE, currentPos, 2, 0.2, 0.2, 0.2, 0.03);
                         
                         this.accept(newPos);
                     });
@@ -103,21 +103,42 @@ public class DisasterManager {
 
     private void createMeteorExplosion(Location impactPoint, float power) {
         plugin.getServer().getRegionScheduler().execute(plugin, impactPoint, () -> {
-            world.createExplosion(
-                impactPoint.getX(),
-                impactPoint.getY(),
-                impactPoint.getZ(),
-                power,
-                true,
-                true
-            );
+            // Add explosion effects and damage
+            double radius = 3.0 + (power/3.0);
+            
+            // 1. Block destruction
+            for(int x = -(int)radius; x <= radius; x++) {
+                for(int y = -(int)radius; y <= radius; y++) {
+                    for(int z = -(int)radius; z <= radius; z++) {
+                        if(x*x + y*y + z*z <= radius*radius) {
+                            Block b = impactPoint.clone().add(x, y, z).getBlock();
+                            if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
+                                b.setType(Material.AIR);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 2. Entity damage
+            impactPoint.getNearbyEntities(radius*2, radius*2, radius*2).forEach(e -> {
+                double distance = e.getLocation().distance(impactPoint);
+                double damage = (1 - (distance/(radius*2))) * 10.0;
+                e.setFireTicks((int)(damage * 20));
+                if(e instanceof Player) {
+                    ((Player)e).damage(damage);
+                }
+            });
+            
+            // 3. Existing particles
+            world.spawnParticle(Particle.CAMPFIRE_COSY_SMOKE, impactPoint, 50, 2, 2, 2, 0.2);
+            world.createExplosion(impactPoint, (float)radius, true, true);
         });
     }
 
-    public void triggerDisaster(Location loc) {
+    public void triggerDisaster(Location loc, DisasterType type) {
         Random rand = new Random();
-        DisasterType type = DisasterType.values()[rand.nextInt(DisasterType.values().length)];
-        int intensity = 30 + rand.nextInt(121); // Genereer intensiteit 30-150
+        int intensity = 30 + rand.nextInt(121); // 30-150 intensity
         
         showWarning(type, loc, intensity);
         
@@ -138,31 +159,54 @@ public class DisasterManager {
         final String finalMessage;
         switch(type) {
             case EARTHQUAKE:
-                finalMessage = "§cDe grond begint te trillen...";
+                double magnitude = 2.0 + (intensity/50.0); // Mw 2.6-5.0
+                int mmi = (int)(magnitude*2); // MMI IV-IX
+                String intensityDescription;
+                if(magnitude < 3.0) {
+                    intensityDescription = "Lichte trilling";
+                } else if(magnitude < 4.0) {
+                    intensityDescription = "Matige aardbeving";
+                } else if(magnitude < 5.0) {
+                    intensityDescription = "Sterke aardbeving";
+                } else {
+                    intensityDescription = "Zeer sterke aardbeving";
+                }
+                finalMessage = "§cAardbeving Mw " + String.format("%.1f", magnitude) +
+                    "\n§7" + intensityDescription + " (MMI " + mmi + ")";
                 break;
             case METEOR_SHOWER:
-                finalMessage = "§6Vurige objecten naderen de atmosfeer!";
+                double speedKmps = 11 + (intensity/150.0)*61; // 11-72 km/s (echte range: 11-72 km/s)
+                double sizeMeters = 0.1 + (intensity/150.0)*4.9; // 0.1-5m (typische meteoroïden)
+                int energy = (int)(Math.pow(sizeMeters,3)*speedKmps/10); // Relatieve kinetische energie
+                String meteorType = (intensity > 100) ? "Boliden" : "Meteorieten";
+                
+                finalMessage = "§6" + meteorType + "storm (" + (int)speedKmps + " km/s)" +
+                    "\n§7Gem. grootte: " + String.format("%.1f", sizeMeters) + "m" +
+                    "\n§7Energie: ~" + energy + " TNT ton";
                 break;
             case TORNADO:
-                int category = Math.min(5, 1 + (intensity/30));
-                finalMessage = "§9Categorie " + category + " tornado nadert!";
+                int efScale = Math.min(5, (intensity - 30) / 24); // EF0-EF5
+                int windSpeed = 29 + (int)((intensity - 30) * (61.0/120.0)); // 29-90 m/s
+                finalMessage = "§9Tornado EF" + efScale + 
+                    "\n§7Windsnelheid: ~" + windSpeed + " m/s";
                 break;
             default:
                 finalMessage = "§4Onbekende ramp!";
         }
         
-            world.getPlayers().forEach(p -> {
+        world.getPlayers().forEach(p -> {
             if(p.getLocation().distance(loc) < 100) {
-                p.sendTitle("§l⚠ WAARSCHUWING ⚠", finalMessage, 10, 70, 20);
+                p.sendTitle("§l⚠ RAMP WAARSCHUWING ⚠", 
+                    finalMessage, 
+                    10, 70, 20);
                 p.playSound(p.getLocation(), Sound.BLOCK_NOTE_BLOCK_BELL, 1.0f, 0.5f);
             }
         });
     }
 
     private void triggerTornado(Location center, int intensity) {
-        int category = Math.min(5, 1 + (intensity/30));
-        int duration = (int)(20 * (30 + (category - 1) * 22.5)); // Category 1:30s - Category 5:120s
-        double speed = (30.0 + (intensity - 30) * (50.0/120.0)) / 200.0; // 30-80 blocks per 10 seconds
+        int duration = (int)(20 * 300); // 5 minutes base duration
+        double speed = 0.3 + (intensity/150.0); // 0.3-1.0 blocks/tick
         double effectRadius = 15 + (intensity/20);
         final double baseSize = 2.0 + (intensity/40.0); // Basis grootte 2-5.75
         final double maxHeight = 35.0 + (intensity/5.0); // Maximale hoogte 35-55
@@ -175,188 +219,261 @@ public class DisasterManager {
             private int ticks = 0;
             private final int intensity;
             Random pathRandom = new Random();
+            private Location currentCenter;
+            private double baseAngle;
+            private Vector movementDirection;
+            private ScheduledTask globalTask;
 
-            TornadoTask(int duration, double speed, int intensity) {
+            TornadoTask(int duration, double speed, int intensity, Location startCenter) {
                 this.maxDuration = duration;
                 this.currentSize = baseSize;
                 this.movementSpeed = speed;
                 this.currentSpeedWrapper = new double[]{speed};
                 this.intensity = intensity;
+                this.currentCenter = startCenter.clone();
+                this.baseAngle = pathRandom.nextDouble() * Math.PI * 2;
+                this.movementDirection = new Vector(Math.cos(baseAngle), 0, Math.sin(baseAngle)).normalize();
+            }
+
+            public void setScheduledTask(ScheduledTask scheduledTask) {
+                this.globalTask = scheduledTask;
             }
 
             @Override
             public void run() {
-                // Progressie van 0-1 over de eerste 20 seconden
-                double progress = Math.min(1.0, ticks/400.0); 
-                currentSize = baseSize + (baseSize * 1.5) * progress;
+                if(ticks >= maxDuration) {
+                    plugin.getServer().getRegionScheduler().execute(plugin, currentCenter, () -> {
+                        // world.spawnParticle(Particle.EXPLOSION_EMITTER, currentCenter, 5);
+                        // world.playSound(currentCenter, Sound.ENTITY_GENERIC_EXPLODE, 3.0f, 0.6f);
+                    });
+                    if(globalTask != null) globalTask.cancel();
+                    return;
+                }
                 
-                // Snelheid opvoeren naarmate de tornado ouder wordt
-                double currentSpeed = movementSpeed * (0.8 + progress*0.4);
-                currentSpeedWrapper[0] = currentSpeed;
+                // Get precise ground level
+                int groundY = world.getHighestBlockYAt(currentCenter) + 5; // Keep 5 blocks above surface
+                double maxY = groundY + 10; // Limit height variation
+
+                // Slower movement calculations
+                double progress = Math.min(1.0, ticks/800.0);  // Slower progression
+                double currentSpeed = Math.min(movementSpeed * (0.5 + progress*0.2), 0.5); // Reduced max speed
                 
-                // Bewegingspatroon met random variatie
-                double angle = pathRandom.nextDouble() * Math.PI * 2;
-                angle += (pathRandom.nextDouble() - 0.5) * 0.5; // Minder abrupte richtingsverandering
+                // Smoother direction changes
+                double angleVariation = (pathRandom.nextDouble() - 0.5) * 0.05; // Reduced from 0.1
+                baseAngle += angleVariation;
                 
-                Vector direction = new Vector(Math.cos(angle), 0, Math.sin(angle))
-                    .multiply(currentSpeed);
+                Vector newDirection = new Vector(Math.cos(baseAngle), 0, Math.sin(baseAngle));
+                movementDirection = movementDirection.multiply(0.9).add(newDirection.multiply(0.1)).normalize();
                 
-                // Hoogtevariatie + geleidelijke stijging
-                double verticalMovement = Math.min(ticks/100.0, 1.0) * 0.3;
-                Location newCenter = center.clone().add(direction)
-                    .add(0, pathRandom.nextDouble() * 2.0 - 1.0 + verticalMovement, 0);
+                Vector direction = movementDirection.clone().multiply(currentSpeed);
                 
-                // Effect radius vergroten
-                destroyBlocksInRadius(newCenter, currentSize * 2.0);
-                affectEntities(newCenter, currentSize);
-                spawnTornadoParticles(newCenter, currentSize);
-                destroyTreesInPath(newCenter, currentSize);
+                // Update position with constraints
+                Location newLocation = currentCenter.clone().add(direction);
+                newLocation.setY(Math.min(
+                    Math.max(newLocation.getY(), groundY),
+                    maxY
+                ));
+
+                // Add air resistance simulation
+                movementDirection.multiply(0.95); 
+
+                // Ensure we stay within loaded chunks
+                if(world.isChunkLoaded(newLocation.getBlockX() >> 4, newLocation.getBlockZ() >> 4)) {
+                    currentCenter = newLocation;
+                }
+
+                // Execute effects
+                destroyBlocksInRadius(currentCenter, currentSize * 2.0);
+                affectEntities(currentCenter, currentSize);
+                spawnTornadoParticles(currentCenter, currentSize);
+                destroyTreesInPath(currentCenter, currentSize);
                 
                 ticks++;
-                if(ticks > maxDuration) return;
             }
             
             private void destroyBlocksInRadius(Location center, double radius) {
-                for(int x = (int)-radius; x <= radius; x++) {
-                    for(int z = (int)-radius; z <= radius; z++) {
-                        if(x*x + z*z < radius*radius) {
-                            final int finalX = x;
-                            final int finalZ = z;
-                            plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
-                                for(int y = 0; y < 15; y++) {
-                                    Block b = center.clone().add(finalX, y, finalZ).getBlock();
-                                    if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
-                                        if(Math.random() < 0.3 - (y*0.02)) {
-                                            // Create falling block with tornado attraction
-                                            org.bukkit.entity.FallingBlock fb = world.spawnFallingBlock(
-                                                b.getLocation().add(0.5, 0, 0.5),
-                                                b.getBlockData()
-                                            );
-                                            fb.setDropItem(false);
-                                            
-                                            // Set velocity towards center with spiral
-                                            Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
-                                            double distance = toCenter.length();
-                                            double distanceFactor = 1 - (distance / (radius));
-                                            fb.setVelocity(
-                                                toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)))
-                                                .add(new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor)))
-                                                .add(new Vector(0, Math.min(3.0 + ((y/15.0) * 6.0), 8.0), 0))
-                                                .multiply(0.6 * (0.5 + Math.random() * 0.5))
-                                            );
-                                            
-                                            b.setType(Material.AIR);
+                int destructionRadius = (int) Math.ceil(radius * 0.9); // Verhoogd van 0.7 naar 0.9
+                if(ticks % 2 != 0) return; // Verwerk elke 2 ticks ipv 3
+                
+                for(int quadrant = 0; quadrant < 4; quadrant++) { // Verhoogd van 3 naar 4 quadranten
+                    int minX = (quadrant == 1) ? -destructionRadius : 0;
+                    int maxX = (quadrant == 0) ? destructionRadius : 0;
+                    int minZ = (quadrant == 2) ? -destructionRadius : 0;
+                    int maxZ = destructionRadius;
+                    
+                    for(int x = minX; x <= maxX; x += 1) { // Check elk blok ipv elke 2
+                        for(int z = minZ; z <= maxZ; z += 1) { 
+                            if(Math.random() > 0.3) { // 70% kans ipv 50%
+                                final int finalX = x;
+                                final int finalZ = z;
+                                plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
+                                    int groundY = world.getHighestBlockYAt(center.clone().add(finalX, 0, finalZ));
+                                    // Verhoogd van 5 naar 8 blokken hoog
+                                    for(int y = groundY; y <= groundY + 8; y++) { 
+                                        Block b = center.clone().add(finalX, y - center.getY(), finalZ).getBlock();
+                                        
+                                        if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
+                                            if(Math.random() > 0.5) { // 50% kans om vallend blok te maken
+                                                org.bukkit.entity.FallingBlock fb = world.spawnFallingBlock(
+                                                    b.getLocation().add(0.5, 0, 0.5),
+                                                    b.getBlockData()
+                                                );
+                                                fb.setDropItem(false);
+                                                
+                                                Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
+                                                double distance = toCenter.length();
+                                                double distanceFactor = 1 - (distance / radius);
+                                                
+                                                fb.setVelocity(
+                                                    toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)))
+                                                    .add(new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor)))
+                                                    .add(new Vector(0, Math.min(3.0 + ((y/15.0) * 6.0), 8.0), 0))
+                                                    .multiply(0.4)
+                                                );
+                                                
+                                                b.setType(Material.AIR);
+                                            }
                                         }
                                     }
-                                }
-                            });
+                                });
+                            }
                         }
                     }
                 }
             }
             
             private void spawnTornadoParticles(Location center, double size) {
-                int particleMultiplier = 1 + (intensity/20);
-                double heightStep = 0.2;
+                // Get precise ground level at current position
+                int groundY = world.getHighestBlockYAt(center) + 1; // +1 to prevent particle clipping
                 
-                // Modified sound logic with cooldown
-                if(ticks % 40 == 0 && ticks < maxDuration) {
-                    world.playSound(
-                        center, 
-                        "csmp.tornado", 
-                        2.0f, 
-                        0.8f + (float)Math.random()*0.4f
-                    );
-                }
+                // Adjust particle generation parameters
+                int particleMultiplier = 8 + (intensity/20);
+                double heightStep = 0.3;  // Reduced vertical spacing
+                double maxVisibleHeight = 35.0 + (intensity/5.0); // Reduced max height
                 
-                for(double y = 0; y < maxHeight; y += heightStep) {
-                    double ratio = y/maxHeight;
+                // Combined smoke parameters
+                Particle.DustOptions blackSmoke = new Particle.DustOptions(
+                    org.bukkit.Color.fromRGB(30, 30, 30),  // Dark gray
+                    1.5f + (intensity/100f)
+                );
+                
+                Particle.DustOptions whiteSmoke = new Particle.DustOptions(
+                    org.bukkit.Color.fromRGB(240, 240, 240),  // Off-white
+                    1.2f + (intensity/120f)
+                );
+
+                // Main particle loop starting from ground level
+                for(double yOffset = 0; yOffset < maxVisibleHeight; yOffset += heightStep) {
+                    double ratio = yOffset/maxVisibleHeight;
                     double currentRadius = size * (1 + ratio*3.0);
                     
-                    // Dynamische rotatie gebaseerd op ticks
-                    double angle = y * Math.PI * 0.8 + (ticks * 0.2);
-                    double x = Math.cos(angle) * currentRadius;
-                    double z = Math.sin(angle) * currentRadius;
+                    // Calculate position relative to ground
+                    double angle = yOffset * Math.PI * 0.5 + (ticks * 0.08);
+                    Location partLoc = center.clone().add(
+                        Math.cos(angle) * currentRadius,
+                        groundY + yOffset - center.getY(), // Adjust for ground height
+                        Math.sin(angle) * currentRadius
+                    );
                     
-                    Location partLoc = center.clone().add(x, y, z);
-                    // Intensere kleurverloop
-                    world.spawnParticle(Particle.DUST_COLOR_TRANSITION, partLoc, 
-                        (int)(5 * particleMultiplier * (1 - ratio)), 0.2, 0.2, 0.2, 0,
-                        new Particle.DustTransition(
-                            org.bukkit.Color.fromRGB(30, 30, 30), 
-                            org.bukkit.Color.fromRGB(150, 150, 150), 
-                            3.0f));
+                    // Ensure particles stay connected to ground
+                    if(yOffset < 2.0) { // Force base particles to ground level
+                        partLoc.setY(groundY);
+                    }
                     
-                    // Draaiende puinwolk
-                    if(ticks % 3 == 0) {
-                        world.spawnParticle(Particle.CLOUD, partLoc, 
-                            (int)(3 * particleMultiplier), 0.6, 0.6, 0.6, 0.15);
+                    // Further reduced white smoke frequency
+                    boolean useWhite = Math.sin(yOffset * 0.4 + ticks * 0.08) > 0.2 && ticks % 4 == 0; // Adjusted wave pattern
+                    Particle.DustOptions currentDust = useWhite ? whiteSmoke : blackSmoke;
+                    
+                    // Core particles with reduced white appearance
+                    world.spawnParticle(Particle.DUST, partLoc, 
+                        (int)(8 * particleMultiplier * (1 - ratio)),
+                        0.2, 0.2, 0.2, 0.01, 
+                        currentDust);
+                    
+                    // Additional smoke layers - minimal white clouds
+                    if(ticks % 4 == 0) {  // Changed from %3 to %4
+                        // Minimal white cloud particles
+                        world.spawnParticle(Particle.CLOUD, partLoc,
+                            (int)(1.5 * particleMultiplier * (1 - ratio)),  // Reduced from 2
+                            0.3, 0.3, 0.3, 0.04);
+                        
+                        // Maintain black smoke particles
+                        world.spawnParticle(Particle.SMOKE, partLoc,
+                            (int)(3 * particleMultiplier * (1 - ratio)),
+                            0.25, 0.25, 0.25, 0.02);
                     }
                 }
                 
-                // Basis explosie-effecten
-                world.spawnParticle(Particle.EXPLOSION_EMITTER, center, 
-                    2 + (intensity/30), 3.0, 3.0, 3.0, 0.5);
+                // Add dense ground connection effect
+                if(ticks % 3 == 0) {
+                    world.spawnParticle(Particle.LARGE_SMOKE, center.clone().add(0, groundY, 0),
+                        (int)(particleMultiplier * 0.5),
+                        1.5, 0.2, 1.5, 0.1);
+                }
             }
             
             private void affectEntities(Location center, double size) {
-                double effectRadius = size * 4;
-                final double tornadoMaxHeight = maxHeight;
+                double effectRadius = Math.max(40, size * 3); // Reduced from 50
+                final double tornadoMaxHeight = 50.0; // Lowered from 75
+                
                 plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
-                    center.getNearbyEntities(effectRadius, 20, effectRadius).forEach(e -> {
-                        Location entityLoc = e.getLocation();
-                        plugin.getServer().getRegionScheduler().execute(plugin, entityLoc, () -> {
-                            Vector toCenter = center.toVector().subtract(entityLoc.toVector());
-                            double distance = toCenter.length();
-                            double distanceFactor = 1 - (distance / effectRadius);
-                            
-                            // Hoogte t.o.v. tornado basis
-                            double heightAboveBase = entityLoc.getY() - center.getY();
-                            double heightRatio = heightAboveBase / tornadoMaxHeight;
-                            boolean shouldEject = heightRatio > 0.5; // Eject bij 50% hoogte
-
-                            if (e instanceof Player) {
-                                Player p = (Player) e;
-                                
-                                // Apply similar forces to non-player entities
-                                Vector inwardForce = toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)));
-                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor));
-                                Vector vertical = new Vector(0, Math.min(3.0 + (heightRatio * 6.0), 8.0), 0);
-                                
-                                Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.6);
-                                p.setVelocity(p.getVelocity().multiply(0.8).add(finalForce.multiply(0.2)));
-                                
-                                if(shouldEject) {
-                                    // Krachtige ejectie met curve
-                                    Vector horizontalEject = toCenter.normalize().multiply(-4.5)
-                                        .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
-                                    Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
-                                    p.setVelocity(horizontalEject.add(verticalEject));
-                                    p.playSound(p.getLocation(), Sound.ENTITY_ENDER_DRAGON_FLAP, 2.0f, 0.3f);
-                                    p.getWorld().spawnParticle(Particle.EXPLOSION, p.getLocation(), 3);
-                                }
-                                
-                                // Schade aanpassen aan hoogte
-                                if(ticks % 20 == 0 && heightRatio < 0.4) {
-                                    p.damage(1.0); // Meer schade onderin
-                                }
-                            } else {
-                                // Apply similar forces to non-player entities
-                                Vector inwardForce = toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)));
-                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor));
-                                Vector vertical = new Vector(0, Math.min(3.0 + (heightRatio * 6.0), 8.0), 0);
-                                
-                                Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.6);
-                                e.setVelocity(e.getVelocity().multiply(0.8).add(finalForce.multiply(0.2)));
-                                
-                                if(shouldEject) {
-                                    Vector horizontalEject = toCenter.normalize().multiply(-4.5)
-                                        .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
-                                    Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
-                                    e.setVelocity(horizontalEject.add(verticalEject));
-                                }
+                    center.getNearbyEntities(effectRadius, 50, effectRadius).forEach(e -> {
+                        if (e instanceof Player) {
+                            Player p = (Player) e;
+                            if (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR) {
+                                return;
                             }
-                        });
+                            Location entityLoc = e.getLocation();
+                            plugin.getServer().getRegionScheduler().execute(plugin, entityLoc, () -> {
+                                Vector toCenter = center.toVector().subtract(entityLoc.toVector());
+                                double distance = toCenter.length();
+                                double distanceFactor = 1 - (distance / effectRadius);
+                                
+                                double heightRatio = (entityLoc.getY() - center.getY()) / 50.0;
+                                boolean shouldEject = heightRatio > 0.6; // Lower ejection threshold
+
+                                if (e instanceof Player) {
+                                    Player player = (Player) e;
+                                    
+                                    // Reduced forces
+                                    Vector inwardForce = toCenter.normalize().multiply(0.6 * (1 + (1 - distanceFactor)));
+                                    Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
+                                        .multiply(4.0 * (1 - distanceFactor)); // Reduced from 6.0
+                                    Vector vertical = new Vector(0, Math.min(4.0 + (heightRatio * 6.0), 10.0), 0); // Reduced lift
+                                    
+                                    Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.7);
+                                    player.setVelocity(player.getVelocity().multiply(0.5).add(finalForce.multiply(0.5)));
+                                    
+                                    if(shouldEject) {
+                                        Vector horizontalEject = toCenter.normalize().multiply(-4.0) // Reduced from -6.0
+                                            .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
+                                        Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
+                                        player.setVelocity(horizontalEject.add(verticalEject));
+                                        // Removed particle effect
+                                    }
+                                    
+                                    if(ticks % 10 == 0) { // Reduced damage frequency
+                                        player.damage(1.0 + heightRatio);
+                                    }
+                                } else {
+                                    // Enhanced suction for non-player entities
+                                    Vector inwardForce = toCenter.normalize().multiply(0.5 * (1 + (1 - distanceFactor))); // Increased from 0.3
+                                    Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
+                                        .multiply(5.0 * (1 - distanceFactor)); // Increased from 4.0
+                                    Vector vertical = new Vector(0, Math.min(4.0 + (heightRatio * 8.0), 10.0), 0); // Increased lift
+                                    
+                                    Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.7);
+                                    e.setVelocity(e.getVelocity().multiply(0.5).add(finalForce.multiply(0.5))); // More force influence
+                                    
+                                    if(shouldEject) {
+                                        Vector horizontalEject = toCenter.normalize().multiply(-3.0) // Reduced from -4.5
+                                            .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
+                                        Vector verticalEject = new Vector(0, 2.0 + (heightRatio * 2.0), 0); // Reduced ejection
+                                        e.setVelocity(horizontalEject.add(verticalEject));
+                                    }
+                                }
+                            });
+                        }
                     });
                 });
             }
@@ -379,11 +496,14 @@ public class DisasterManager {
             }
         }
 
-        TornadoTask task = new TornadoTask(duration, speed, intensity);
+        TornadoTask task = new TornadoTask(duration, speed, intensity, center);
         ScheduledTask scheduledTask = plugin.getServer().getGlobalRegionScheduler()
             .runAtFixedRate(plugin, t -> {
-                task.run();
-                if(task.ticks > task.maxDuration) t.cancel();
+                task.setScheduledTask(t);
+                Location centerCopy = task.currentCenter.clone();
+                plugin.getServer().getRegionScheduler().execute(plugin, centerCopy, () -> {
+                    task.run();
+                });
             }, 1, 1);
     }
 
@@ -396,6 +516,9 @@ public class DisasterManager {
             // Verplaats speleracties naar de juiste region schedulers
             for(Player p : Bukkit.getOnlinePlayers()) {
                 if(p.getLocation().distanceSquared(epicenter) > radius*radius) continue;
+                if (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR) {
+                    continue;
+                }
                 
                 // Schedule voor elke speler apart
                 plugin.getServer().getRegionScheduler().execute(plugin, p.getLocation(), () -> {
