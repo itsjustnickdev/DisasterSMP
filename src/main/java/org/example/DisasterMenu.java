@@ -28,7 +28,7 @@ public class DisasterMenu implements InventoryHolder {
         this.player = player;
         this.disasterManager = disasterManager;
         this.plugin = plugin;
-        this.inv = Bukkit.createInventory(this, 9, ChatColor.DARK_RED + "Select Disaster");
+        this.inv = Bukkit.createInventory(this, 9, ChatColor.DARK_RED + "Selecteer Ramp");
         initializeItems();
     }
 
@@ -36,25 +36,25 @@ public class DisasterMenu implements InventoryHolder {
         // Earthquake Item
         inv.setItem(2, createItem(
             Material.IRON_PICKAXE, 
-            ChatColor.RED + "Earthquake",
-            ChatColor.GRAY + "Causes ground tremors and cracks",
-            ChatColor.DARK_GRAY + "Range: 100x100 blocks"
+            ChatColor.RED + "Aardbeving",
+            ChatColor.GRAY + "Veroorzaakt grondtrillingen en scheuren",
+            ChatColor.DARK_GRAY + "Bereik: 100x100 blokken"
         ));
 
         // Meteor Shower Item
         inv.setItem(4, createItem(
             Material.FIRE_CHARGE, 
-            ChatColor.GOLD + "Meteor Shower",
-            ChatColor.GRAY + "Rains fiery meteors from sky",
-            ChatColor.DARK_GRAY + "Range: 100x100 blocks"
+            ChatColor.GOLD + "Meteorenregen",
+            ChatColor.GRAY + "Regent vurige meteoren uit de lucht",
+            ChatColor.DARK_GRAY + "Bereik: 100x100 blokken"
         ));
 
         // Tornado Item
         inv.setItem(6, createItem(
             Material.WHITE_WOOL, 
             ChatColor.AQUA + "Tornado",
-            ChatColor.GRAY + "Creates destructive spinning vortex",
-            ChatColor.DARK_GRAY + "Range: 100x100 blocks"
+            ChatColor.GRAY + "Creëert een vernietigende wervelwind",
+            ChatColor.DARK_GRAY + "Bereik: 100x100 blokken"
         ));
     }
 
@@ -76,53 +76,58 @@ public class DisasterMenu implements InventoryHolder {
         
         String displayName = item.getItemMeta().getDisplayName();
         
-        // Get all online players excluding the executor
         List<Player> allPlayers = Bukkit.getOnlinePlayers().stream()
             .filter(p -> p.getGameMode() == GameMode.SURVIVAL)
             .collect(Collectors.toList());
         
-        Location targetLocation = player.getWorld().getSpawnLocation(); // Default value
-        
         if(!allPlayers.isEmpty()) {
-            // Select random player from entire server
             Player target = allPlayers.get(new Random().nextInt(allPlayers.size()));
-            getRandomNearbyLocation(target.getLocation()).thenAcceptAsync(location -> {
-                disasterManager.triggerDisaster(location, DisasterManager.DisasterType.METEOR_SHOWER);
-                player.sendMessage(ChatColor.YELLOW + "Disaster targeting " + target.getName() + "'s location!");
+            // Player-relative: 50-100 blocks from target
+            getRandomNearbyLocation(target.getLocation(), 100, 50).thenAccept(loc -> {
+                plugin.getServer().getRegionScheduler().execute(plugin, loc, () -> {
+                    player.sendMessage(ChatColor.YELLOW + "Disaster targeting " + target.getName() + "'s area!");
+                    triggerDisaster(displayName, loc);
+                });
             });
+            return true;
         } else {
-            // Fallback to spawn if no other players
-            player.sendMessage(ChatColor.YELLOW + "No other players online - targeting world spawn!");
-        }
-        
-        if (displayName.contains("Earthquake")) {
-            disasterManager.triggerDisaster(targetLocation, DisasterManager.DisasterType.EARTHQUAKE);
-            return true;
-        } else if (displayName.contains("Meteor Shower")) {
-            disasterManager.triggerDisaster(targetLocation, DisasterManager.DisasterType.METEOR_SHOWER);
-            return true;
-        } else if (displayName.contains("Tornado")) {
-            disasterManager.triggerDisaster(targetLocation, DisasterManager.DisasterType.TORNADO);
+            // Spawn-relative: 150-300 blocks from world spawn
+            Location spawn = player.getWorld().getSpawnLocation();
+            getRandomNearbyLocation(spawn, 300, 150).thenAccept(loc -> {
+                plugin.getServer().getRegionScheduler().execute(plugin, loc, () -> {
+                    player.sendMessage(ChatColor.YELLOW + "No players online - targeting safe zone (" 
+                        + (int)loc.distance(spawn) + " blocks from spawn)");
+                    triggerDisaster(displayName, loc);
+                });
+            });
             return true;
         }
-        return false;
     }
 
-    private CompletableFuture<Location> getRandomNearbyLocation(Location center) {
+    private void triggerDisaster(String displayName, Location location) {
+        if (displayName.contains("Earthquake")) {
+            disasterManager.triggerDisaster(location, DisasterManager.DisasterType.EARTHQUAKE);
+        } else if (displayName.contains("Meteor Shower")) {
+            disasterManager.triggerDisaster(location, DisasterManager.DisasterType.METEOR_SHOWER);
+        } else if (displayName.contains("Tornado")) {
+            disasterManager.triggerDisaster(location, DisasterManager.DisasterType.TORNADO);
+        }
+    }
+
+    private CompletableFuture<Location> getRandomNearbyLocation(Location center, int radius, int minDistance) {
         CompletableFuture<Location> future = new CompletableFuture<>();
         plugin.getServer().getRegionScheduler().run(plugin, center, task -> {
             Random random = new Random();
             World world = center.getWorld();
             
-            // Generate valid coordinates
-            int x = center.getBlockX() + random.nextInt(100) - 50;
-            int z = center.getBlockZ() + random.nextInt(100) - 50;
+            // Generate coordinates within radius but outside minDistance
+            double angle = random.nextDouble() * 2 * Math.PI;
+            double distance = minDistance + (radius - minDistance) * random.nextDouble();
             
-            // Ensure minimum distance without async checks
-            if(Math.abs(x - center.getBlockX()) < 20) x += Integer.signum(x - center.getBlockX()) * 20;
-            if(Math.abs(z - center.getBlockZ()) < 20) z += Integer.signum(z - center.getBlockZ()) * 20;
+            int x = center.getBlockX() + (int)(Math.cos(angle) * distance);
+            int z = center.getBlockZ() + (int)(Math.sin(angle) * distance);
             
-            // Get highest block synchronously
+            // Get highest block at location
             int y = world.getHighestBlockYAt(x, z);
             future.complete(new Location(world, x, y, z));
         });

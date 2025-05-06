@@ -25,6 +25,7 @@ import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.ChatColor;
 import org.bukkit.block.data.BlockData;
+import java.util.List;
 
 public class DisasterManager {
     private final World world;
@@ -53,7 +54,7 @@ public class DisasterManager {
                 // Kleinere clusters met meer spreiding
                 int clusterSize = 1 + (intensity/60); // 1-3 meteoren per cluster
                 for(int i=0; i<clusterSize; i++) {
-                    Location meteorLoc = center.clone().add(
+                Location meteorLoc = center.clone().add(
                         (random.nextGaussian() * spreadRadius),
                         50 + random.nextInt(40),
                         (random.nextGaussian() * spreadRadius)
@@ -86,9 +87,9 @@ public class DisasterManager {
                         Block groundBlock = world.getBlockAt(currentPos.clone().subtract(0, 1, 0));
                         if(groundBlock != null && groundBlock.getType().isSolid()) {
                             createMeteorExplosion(currentPos, power);
-                            return;
-                        }
-                        
+                        return;
+                    }
+                    
                         // Vertraagde val snelheid
                         Location newPos = currentPos.clone().add(0, -1, 0); // 1 blok per tick ipv 2
                         
@@ -205,7 +206,7 @@ public class DisasterManager {
                 finalMessage = "§4Onbekende ramp!";
         }
         
-        world.getPlayers().forEach(p -> {
+            world.getPlayers().forEach(p -> {
             if(p.getLocation().distance(loc) < 100) {
                 p.sendTitle("§l⚠ RAMP WAARSCHUWING ⚠", 
                     finalMessage, 
@@ -287,7 +288,7 @@ public class DisasterManager {
 
                 // Add air resistance simulation
                 movementDirection.multiply(0.95); 
-
+                
                 // Ensure we stay within loaded chunks
                 if(world.isChunkLoaded(newLocation.getBlockX() >> 4, newLocation.getBlockZ() >> 4)) {
                     currentCenter = newLocation;
@@ -315,38 +316,38 @@ public class DisasterManager {
                     for(int x = minX; x <= maxX; x += 1) { // Check elk blok ipv elke 2
                         for(int z = minZ; z <= maxZ; z += 1) { 
                             if(Math.random() > 0.3) { // 70% kans ipv 50%
-                                final int finalX = x;
-                                final int finalZ = z;
-                                plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
+                            final int finalX = x;
+                            final int finalZ = z;
+                            plugin.getServer().getRegionScheduler().execute(plugin, center, () -> {
                                     int groundY = world.getHighestBlockYAt(center.clone().add(finalX, 0, finalZ));
                                     // Verhoogd van 5 naar 8 blokken hoog
                                     for(int y = groundY; y <= groundY + 8; y++) { 
                                         Block b = center.clone().add(finalX, y - center.getY(), finalZ).getBlock();
                                         
-                                        if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
+                                    if(b.getType().isSolid() && !b.getType().toString().contains("BEDROCK")) {
                                             if(Math.random() > 0.5) { // 50% kans om vallend blok te maken
-                                                org.bukkit.entity.FallingBlock fb = world.spawnFallingBlock(
-                                                    b.getLocation().add(0.5, 0, 0.5),
-                                                    b.getBlockData()
-                                                );
-                                                fb.setDropItem(false);
-                                                
-                                                Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
+                                            org.bukkit.entity.FallingBlock fb = world.spawnFallingBlock(
+                                                b.getLocation().add(0.5, 0, 0.5),
+                                                b.getBlockData()
+                                            );
+                                            fb.setDropItem(false);
+                                            
+                                            Vector toCenter = center.toVector().subtract(fb.getLocation().toVector());
                                                 double distance = toCenter.length();
                                                 double distanceFactor = 1 - (distance / radius);
                                                 
-                                                fb.setVelocity(
+                                            fb.setVelocity(
                                                     toCenter.normalize().multiply(0.3 * (1 + (1 - distanceFactor)))
                                                     .add(new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize().multiply(4.0 * (1 - distanceFactor)))
                                                     .add(new Vector(0, Math.min(3.0 + ((y/15.0) * 6.0), 8.0), 0))
                                                     .multiply(0.4)
-                                                );
-                                                
-                                                b.setType(Material.AIR);
-                                            }
+                                            );
+                                            
+                                            b.setType(Material.AIR);
                                         }
                                     }
-                                });
+                                }
+                            });
                             }
                         }
                     }
@@ -404,7 +405,7 @@ public class DisasterManager {
                     // Additional smoke layers - minimal white clouds
                     if(ticks % 4 == 0) {  // Changed from %3 to %4
                         // Minimal white cloud particles
-                        world.spawnParticle(Particle.CLOUD, partLoc,
+                        world.spawnParticle(Particle.CLOUD, partLoc, 
                             (int)(1.5 * particleMultiplier * (1 - ratio)),  // Reduced from 2
                             0.3, 0.3, 0.3, 0.04);
                         
@@ -434,28 +435,28 @@ public class DisasterManager {
                             if (p.getGameMode() == GameMode.CREATIVE || p.getGameMode() == GameMode.SPECTATOR) {
                                 return;
                             }
-                            Location entityLoc = e.getLocation();
-                            plugin.getServer().getRegionScheduler().execute(plugin, entityLoc, () -> {
-                                Vector toCenter = center.toVector().subtract(entityLoc.toVector());
-                                double distance = toCenter.length();
-                                double distanceFactor = 1 - (distance / effectRadius);
-                                
+                        Location entityLoc = e.getLocation();
+                        plugin.getServer().getRegionScheduler().execute(plugin, entityLoc, () -> {
+                            Vector toCenter = center.toVector().subtract(entityLoc.toVector());
+                            double distance = toCenter.length();
+                            double distanceFactor = 1 - (distance / effectRadius);
+                            
                                 double heightRatio = (entityLoc.getY() - center.getY()) / 50.0;
                                 boolean shouldEject = heightRatio > 0.6; // Lower ejection threshold
 
-                                if (e instanceof Player) {
+                            if (e instanceof Player) {
                                     Player player = (Player) e;
-                                    
+                                
                                     // Reduced forces
                                     Vector inwardForce = toCenter.normalize().multiply(0.6 * (1 + (1 - distanceFactor)));
-                                    Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
+                                Vector tangent = new Vector(-toCenter.getZ(), 0, toCenter.getX()).normalize()
                                         .multiply(4.0 * (1 - distanceFactor)); // Reduced from 6.0
                                     Vector vertical = new Vector(0, Math.min(4.0 + (heightRatio * 6.0), 10.0), 0); // Reduced lift
-                                    
+
                                     Vector finalForce = inwardForce.add(tangent).add(vertical).multiply(0.7);
                                     player.setVelocity(player.getVelocity().multiply(0.5).add(finalForce.multiply(0.5)));
-                                    
-                                    if(shouldEject) {
+                                
+                                if(shouldEject) {
                                         Vector horizontalEject = toCenter.normalize().multiply(-4.0) // Reduced from -6.0
                                             .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
                                         Vector verticalEject = new Vector(0, 3.0 + (heightRatio * 3.0), 0);
@@ -481,9 +482,9 @@ public class DisasterManager {
                                             .rotateAroundY(Math.toRadians(45 * (Math.random() - 0.5)));
                                         Vector verticalEject = new Vector(0, 2.0 + (heightRatio * 2.0), 0); // Reduced ejection
                                         e.setVelocity(horizontalEject.add(verticalEject));
-                                    }
                                 }
-                            });
+                            }
+                        });
                         }
                     });
                 });
@@ -513,72 +514,80 @@ public class DisasterManager {
                 task.setScheduledTask(t);
                 Location centerCopy = task.currentCenter.clone();
                 plugin.getServer().getRegionScheduler().execute(plugin, centerCopy, () -> {
-                    task.run();
+                task.run();
                 });
             }, 1, 1);
     }
 
     private void triggerEarthquake(Location epicenter, int intensity) {
-        Random random = new Random();
-        
-        // World-based effects instead of player-specific
-        world.spawnParticle(Particle.BLOCK_CRUMBLE, epicenter, 100, 25, 0, 25, 0.1, Material.STONE.createBlockData());
-        world.spawnParticle(Particle.FALLING_DUST, epicenter, 80, 25, 0, 25, 0.05, Material.DIRT.createBlockData());
-        world.playSound(epicenter, Sound.BLOCK_STONE_BREAK, 1.0f, 0.8f);
-        
-        // Actual block destruction
-        createEarthquakeCracks(epicenter, intensity);
-        
-        // Affect all nearby players
-        epicenter.getNearbyPlayers(100).forEach(p -> {
-            // Screen shake parameters
-            int shakeDuration = 40 + (intensity * 2); // 40-280 ticks (2-14 seconds)
-            float shakeIntensity = 0.08f + (intensity/150f); // 0.08-0.18
+        // Run in the epicenter's region scheduler
+        plugin.getServer().getRegionScheduler().execute(plugin, epicenter, () -> {
+            Random random = new Random();
             
-            // Schedule repeating screen shake
-            AtomicInteger shakeCount = new AtomicInteger();
-            Consumer<ScheduledTask> shakeTask = t -> {
-                plugin.getServer().getRegionScheduler().execute(plugin, p.getLocation(), () -> {
-                    if(shakeCount.getAndIncrement() > shakeDuration/5) {
-                        t.cancel();
-                        return;
-                    }
-                    
-                    // Screen shake effect using damage animation
-                    p.playHurtAnimation(0);
-                    
-                    // Camera movement simulation
-                    Vector shakeVector = new Vector(
-                        (Math.random() - 0.5) * shakeIntensity,
-                        (Math.random() - 0.3) * shakeIntensity/2,
-                        (Math.random() - 0.5) * shakeIntensity
-                    );
-                    p.setVelocity(p.getVelocity().add(shakeVector));
-                    
-                    // Ground particles at feet
-                    p.spawnParticle(Particle.BLOCK_CRUMBLE, 
-                        p.getLocation().add(0, 0.1, 0), 5, 
-                        0.2, 0, 0.2, 0.05, 
-                        Material.DIRT.createBlockData());
-                });
-            };
+            // World-based effects
+            world.spawnParticle(Particle.BLOCK_CRUMBLE, epicenter, 100, 25, 0, 25, 0.1, Material.STONE.createBlockData());
+            world.spawnParticle(Particle.FALLING_DUST, epicenter, 80, 25, 0, 25, 0.05, Material.DIRT.createBlockData());
+            world.playSound(epicenter, Sound.BLOCK_STONE_BREAK, 1.0f, 0.8f);
             
-            plugin.getServer().getGlobalRegionScheduler()
-                .runAtFixedRate(plugin, shakeTask, 1, 5);
+            // Actual block destruction
+            createEarthquakeCracks(epicenter, intensity);
+            
+            // Get nearby players safely
+            List<Player> nearbyPlayers = epicenter.getNearbyPlayers(100).stream()
+                .filter(p -> p.getGameMode() == GameMode.SURVIVAL)
+                .toList();
 
-            // Original velocity effects
-            p.setVelocity(p.getVelocity().add(new Vector(
-                (random.nextDouble() - 0.5) * 0.6,
-                0.1,
-                (random.nextDouble() - 0.5) * 0.6
-            )));
-            
-            if(intensity > 75) {
-                p.damage(2.0);
-                p.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 1));
-            }
-            p.spigot().sendMessage(ChatMessageType.ACTION_BAR, 
-                new TextComponent(ChatColor.RED + "⚠️ De grond trilt hevig onder je voeten!"));
+            // Affect players
+            nearbyPlayers.forEach(p -> {
+                // Screen shake parameters
+                int shakeDuration = 40 + (intensity * 2); // 40-280 ticks (2-14 seconds)
+                float shakeIntensity = 0.08f + (intensity/150f); // 0.08-0.18
+                
+                // Schedule repeating screen shake
+                AtomicInteger shakeCount = new AtomicInteger();
+                Consumer<ScheduledTask> shakeTask = t -> {
+                    plugin.getServer().getRegionScheduler().execute(plugin, p.getLocation(), () -> {
+                        if(shakeCount.getAndIncrement() > shakeDuration/5) {
+                            t.cancel();
+                            return;
+                        }
+                        
+                        // Screen shake effect using damage animation
+                        p.playHurtAnimation(0);
+                        
+                        // Camera movement simulation
+                        Vector shakeVector = new Vector(
+                            (Math.random() - 0.5) * shakeIntensity,
+                            (Math.random() - 0.3) * shakeIntensity/2,
+                            (Math.random() - 0.5) * shakeIntensity
+                        );
+                        p.setVelocity(p.getVelocity().add(shakeVector));
+                        
+                        // Ground particles at feet
+                        p.spawnParticle(Particle.BLOCK_CRUMBLE, 
+                            p.getLocation().add(0, 0.1, 0), 5, 
+                            0.2, 0, 0.2, 0.05, 
+                            Material.DIRT.createBlockData());
+                    });
+                };
+                
+                plugin.getServer().getGlobalRegionScheduler()
+                    .runAtFixedRate(plugin, shakeTask, 1, 5);
+
+                // Original velocity effects
+                p.setVelocity(p.getVelocity().add(new Vector(
+                    (random.nextDouble() - 0.5) * 0.6,
+                    0.1,
+                    (random.nextDouble() - 0.5) * 0.6
+                )));
+                
+                if(intensity > 75) {
+                    p.damage(2.0);
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 1));
+                }
+                p.spigot().sendMessage(ChatMessageType.ACTION_BAR, 
+                    new TextComponent(ChatColor.RED + "⚠️ De grond trilt hevig onder je voeten!"));
+            });
         });
     }
 
@@ -597,7 +606,7 @@ public class DisasterManager {
         plugin.getServer().getRegionScheduler().execute(plugin, start, () -> {
             for(int i = 0; i < length; i++) {
                 Location segment = start.clone().add(direction.clone().multiply(i));
-                
+            
                 // Create fissure segment
                 for(double dx = -width; dx <= width; dx += 1.0) {
                     for(double dz = -width; dz <= width; dz += 1.0) {
@@ -667,11 +676,11 @@ public class DisasterManager {
                                         block.setType(Material.GRAVEL, true);
                                     } else {
                                         block.setType(Material.AIR, true);
-                                    }
-                                }
-                            }
                         }
-                    }
+                                }
+                }
+            }
+        }
                 }
             }
         });

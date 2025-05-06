@@ -5,10 +5,13 @@ api-version: 1.21
 folia-supported: true
 commands:
   disaster:
-    description: Start een ramp
+    description: Activeer een natuurlijke ramp
     usage: /disaster
 permissions:
   disaster.trigger:
     description: Toestemming om rampen te activeren
-    default: op # Alleen operators krijgen dit standaard
+    default: op
+  disaster.bypasscooldown:
+    description: Omzeil de wachttijd tussen rampen
+    default: op
 
